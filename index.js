@@ -9,6 +9,7 @@ import express from "express";
 import basicAuth from "express-basic-auth";
 import mime from "mime";
 import fetch from "node-fetch";
+import WebSocket from "ws";
 // import { setupMasqr } from "./Masqr.js";
 import config from "./config.js";
 
@@ -21,6 +22,8 @@ const bareServer = createBareServer("/ca/");
 const PORT = process.env.PORT || 8080;
 const cache = new Map();
 const CACHE_TTL = 30 * 24 * 60 * 60 * 1000; // Cache for 30 Days
+
+const wss = new WebSocket.Server({ server });
 
 if (config.challenge !== false) {
   console.log(chalk.green("🔒 Password protection is enabled! Listing logins below"));
@@ -99,8 +102,32 @@ const routes = [
   { path: "/play.html", file: "games.html" },
   { path: "/c", file: "settings.html" },
   { path: "/d", file: "tabs.html" },
+  { path: "/chat", file: "chat.html" },
   { path: "/", file: "index.html" },
 ];
+
+// WebSocket chat server
+wss.on('connection', (ws) => {
+  ws.on('message', (message) => {
+    try {
+      const data = JSON.parse(message.toString());
+      if (data.type === 'message' && data.username && data.message) {
+        // Broadcast to all clients
+        wss.clients.forEach(client => {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({
+              type: 'message',
+              username: data.username,
+              message: data.message
+            }));
+          }
+        });
+      }
+    } catch (e) {
+      console.error('Invalid message:', e);
+    }
+  });
+});
 
 // biome-ignore lint: idk
 routes.forEach(route => {
@@ -129,6 +156,10 @@ server.on("request", (req, res) => {
 server.on("upgrade", (req, socket, head) => {
   if (bareServer.shouldRoute(req)) {
     bareServer.routeUpgrade(req, socket, head);
+  } else if (req.headers.upgrade === 'websocket') {
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit('connection', ws, req);
+    });
   } else {
     socket.end();
   }
